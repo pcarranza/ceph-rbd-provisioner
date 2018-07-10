@@ -1,30 +1,29 @@
-# Switch this to a multi-stage build once quay.io supports it.
-#FROM centos:7 AS build
-FROM centos/aarch64:7
+FROM arm64v8/ubuntu:18.04 AS build
 
-RUN yum -y install git
+RUN apt update && apt -y install git curl ceph
 
 # Install go
-RUN curl -sSL https://storage.googleapis.com/golang/go1.10.1.linux-arm64.tar.gz | gzip -dc | tar xf - -C /usr/local
+RUN curl -sSL https://storage.googleapis.com/golang/go1.10.2.linux-arm64.tar.gz | gzip -dc | tar xf - -C /usr/local
 
 ENV GOPATH /usr/src/go
 ENV PATH /usr/local/go/bin:/usr/local/bin:/bin:/usr/bin
 
 # Add source
 WORKDIR /usr/src/go/src/github.com/kubernetes-incubator/external-storage
-RUN git clone https://github.com/kubernetes-incubator/external-storage .
+RUN git clone https://github.com/kubernetes-incubator/external-storage . && git checkout tags/rbd-provisioner-v0.1.0
 
 # Build
-RUN set -ex && cd /usr/src/go/src/github.com/kubernetes-incubator/external-storage/ceph/rbd && env CGO_ENABLED=0 go build -a -ldflags '-extldflags "-static"' -o rbd-provisioner ./cmd/rbd-provisioner
+RUN set -ex && cd /usr/src/go/src/github.com/kubernetes-incubator/external-storage/ceph/rbd \
+    && env CGO_ENABLED=0 go build -a -ldflags '-extldflags "-static"' -o rbd-provisioner ./cmd/rbd-provisioner
 
-#FROM centos:7
+# Generate the final image
+FROM arm64v8/ubuntu:18.04
 
-RUN cp /usr/src/go/src/github.com/kubernetes-incubator/external-storage/ceph/rbd/rbd-provisioner /usr/local/bin/rbd-provisioner
+RUN apt update \
+    && apt -y install ceph \
+    && rm -rf /var/lib/apt/lists/*
 
-RUN rpm -Uvh https://download.ceph.com/rpm-luminous/el7/noarch/ceph-release-1-1.el7.noarch.rpm
-RUN yum install -y epel-release
-RUN yum install -y ceph-common
-#COPY --from=build /usr/src/go/src/github.com/kubernetes-incubator/external-storage/ceph/rbd/rbd-provisioner /usr/local/bin/rbd-provisioner
-RUN rm -rf /usr/src/go /usr/local/go
+# Copy the image from the builder image
+COPY --from=build /usr/src/go/src/github.com/kubernetes-incubator/external-storage/ceph/rbd/rbd-provisioner /usr/local/bin
 
 ENTRYPOINT ["/usr/local/bin/rbd-provisioner"]
